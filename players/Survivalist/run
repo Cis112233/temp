@@ -1,0 +1,50 @@
+#!/bin/python2
+
+import random
+
+with open('players') as f:
+    p = f.read().split() + ['no one']
+
+
+day = True
+target = "survivalist"
+role = "villager"
+try:
+    line = raw_input()
+    if "You are the cop" in line:
+        role = "cop"
+    else if "You are the doctor" in line:
+        role = "doctor"
+    else if "You are a member of the mafia" in line:
+        role = "mafia"
+
+    if line.endswith(('?', 'victim.')):
+        day = False
+    if not day:
+        if target == "survivalist":
+            print random.choice(p)
+        else if role == mafia || role == sheriff:
+            print target
+        else if role == doctor:
+            print random.choice(p)
+    else:
+        if "survivalist" in line && ("I think this player is suspicious:" in line || 
+        "I think this player is mafia:" in line ||
+        "I investigated this player and found that they were mafia-aligned:")):
+            print 'say 0'
+            if role == "villager" || role == "mafia":
+                print 'say 4'
+            else if role == "cop":
+                print 'say 2'
+            else if role == "doctor"
+                print 'say 3'
+            target = line.split(" ")[0]
+            print 'vote ' + target
+
+        else if target != "survivalist":
+            print 'say 6 ' + target
+            print 'vote ' + target
+    else:
+        pass
+
+except: pass

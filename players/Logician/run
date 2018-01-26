@@ -1,0 +1,266 @@
+#!/usr/bin/env python3
+import sys
+import os
+import re
+import random
+from types import SimpleNamespace
+def chooseSet(set):
+    return random.choice(list(set))
+sys.stdin = open("from_server")
+sys.stdout = open("to_server","w")
+def saveData(data):
+    with open("gameData.txt", "w") as datafile:
+        datafile.write(repr(data.__dict__))
+MY_NAME = os.path.basename(os.getcwd())
+opener = input()
+DATABASES = ("targets","herd","mafiosos","guilty","innocent","unlikely", "requests",
+            "selfvotes","players","used_roles")
+ALLOW_SELF = ("players", "mafiosos")
+LIESPERROLE = {"cop": ("I am the cop",
+                "I investigated this player and found that they were mafia-aligned",
+                "I investigated this player and found that they were village-aligned"),
+              "doctor": ("I am the doctor",
+                   "I tried to save this player",
+                   "I successfully saved this player"
+                   )
+        }
+#1: At the beginning of the game, parse beginning of day 0
+if opener == "Rise and shine! Today is day 0.":
+    #Next two lines are completely predetermined and hold no data
+    assert input() == "No voting will occur today."
+    assert input() == "Be warned: Tonight the mafia will strike."
+    data = SimpleNamespace(cop=False, doctor=False, queued=[],askers={})
+    for datum in DATABASES:
+        setattr(data, datum, set())
+    try:
+        nextline = input()
+        if nextline == "You are a member of the mafia.":
+            data.mafiosos.add(MY_NAME)
+            assert input() == "Your allies are:"
+            while True:
+                data.mafiosos.add(input())
+        elif nextline == "You are the doctor":
+            data.doctor = True
+            data.used_roles.add("doctor")
+        elif nextline == "You are the cop":
+            data.cop = True
+            data.used_roles.add("cop")
+    except EOFError:
+        #villager, or ran out of mafiosos to add
+        pass
+    with open("players") as playersfile:
+        data.players = set(playersfile.read().strip().splitlines())
+    saveData(data)
+    exit()
+with open("gameData.txt") as datafile:
+    data = SimpleNamespace(**eval(datafile.read().strip()))
+#2: Beginning of day nonzero
+if opener.startswith("Dawn of day"):
+    data.requests.clear()
+    data.selfvotes.clear()
+    data.askers.clear()
+    data.voted = False
+    try:
+        while True:
+            nextline = input()
+            victim = re.match("Last night, (.*) was killed. They were (?:a|the) (.*).", nextline)
+            if victim:
+                victim, role = victim.groups()
+                #remove dead people from lists
+                for datum in DATABASES:
+                    getattr(data, datum).discard(victim)
+                if role == "cop" or role == "doctor":
+                    data.used_roles.add(role)
+                continue
+            investigated = re.match("Investigations showed that (.*) is (.*)-aligned.", nextline)
+            if investigated:
+                assert data.cop
+                who = investigated.group(1)
+                if investigated.group(2) == "mafia":
+                    data.guilty.add(who)
+                    data.unlikely.discard(who)
+                else:
+                    data.targets.discard(who)
+                    data.herd.discard(who)
+                    data.innocent.add(who)
+                    data.unlikely.add(who)
+                continue
+    except EOFError:
+        pass
+#3: We're being told some messages / news
+elif " says " in opener or " voted " in opener:
+    message = opener
+    acted = question = False
+    try:
+        while True:
+            if " voted " in message:
+                message = "<vote against>"
+                speaker, subject = re.match("(.*) has voted to lynch (.*)", message).groups()
+                target = None
+            else:
+                speaker, target, message, subject = \
+                    re.match("(.*) says \"(?:(.*), )?([^:\?]+)(?:[:\?]\s*(.*))?\"",
+                             message).groups()
+            if speaker == MY_NAME:
+                continue
+            BAD_MESSAGES = ("<vote against>", "I think this player is mafia",
+                            "I investigated this player and found that they were mafia-aligned",
+                            "I think this player is suspicious")
+            GOOD_MESSAGES = ("I think this player is the cop",
+                             "I think this player is the doctor",
+                             "I think this player is a normal villager",
+                             "I trust this player",
+                             "I investigated this player and found that they were village-aligned")
+            OUTS = "I am the cop", "I am the doctor"
+            LIES = ()
+            for role in data.used_roles:
+                LIES += LIESPERROLE[role]
+            if message == "Yes" or message == "No":
+                if question and not target:
+                    target = chooseSet(data.askers)
+                if target in data.askers:
+                    BAD_MESSAGES += "Yes",
+                    GOOD_MESSAGES += "No",
+                    subject = data.askers[target]
+            if message in LIES and speaker not in data.mafiosos and speaker not in data.innocent:
+                # What you just said is false, and I know it!
+                data.unlikely.discard(speaker)
+                data.targets.add(speaker)
+                if subject and subject not in (data.unlikely.union(data.mafiosos)):
+                    data.targets.add(subject)
+            elif message in BAD_MESSAGES:
+                if speaker in data.guilty:
+                    #mafiosos rarely turn on eachother
+                    data.unlikely.add(subject)
+                    data.targets.discard(subject)
+                elif speaker in data.unlikely:
+                    #believe the herd, especially people who we trust
+                    data.herd.add(subject)
+                elif subject in data.unlikely:
+                    #how dare you speak against players likely to be village-aligned!
+                    data.targets.add(speaker)
+                elif subject == MY_NAME or subject in data.mafiosos:
+                    #DON'T ATTACK ME (or my fellow mafiosos)
+                    data.targets.add(speaker)
+                else:
+                    #believe the herd
+                    data.herd.add(subject)
+                if not acted and message == "<vote against>":
+                    if subject == MY_NAME:
+                        data.selfvotes.add(speaker)
+                        if len(data.selfvotes) >= (len(data.players)-len(data.mafiosos)/3):
+                            if data.cop:
+                                print("say 2")
+                                #give a data point to prove it
+                                if random.random() > .5 and data.guilty:
+                                    data.queued.append("say 14 %s" % chooseSet(data.guilty))
+                                elif data.innocent:
+                                    data.queued.append("say 15 %s" % chooseSet(data.innocent))
+                            else:
+                                print("say 4") #Don't out myself if I'm the doctor
+                                # and just lie if I'm a mafioso
+                            acted = True
+                    else:
+                        data.selfvotes.discard(speaker)
+            elif message in OUTS and data.mafiosos and speaker not in data.unlikely:
+                data.targets.add(speaker) #Kill the fools who boast!
+            elif message in GOOD_MESSAGES:
+                chance = random.random() < .1 - (speaker in data.targets) / 20
+                if speaker in data.guilty: #Mafia liars
+                    if subject not in data.unlikely:
+                        data.targets.add(subject)
+                elif subject == MY_NAME and chance:
+                    if speaker in data.targets:data.targets.remove(speaker)
+                    data.unlikely.add(speaker)
+                elif speaker in data.unlikely or chance:
+                    data.unlikely.add(subject)
+            elif message == "Do you think this player is mafia":
+                if subject == MY_NAME:
+                    data.targets.append(speaker)
+                if target == MY_NAME or not target:
+                    if speaker in data.guilty:
+                        data.queued.append("say 14 %s %s" % (subject, speaker))
+                    elif speaker in data.innocent:
+                        data.queued.append("say 15 %s %s" % (subject, speaker))
+                    elif subject in data.targets or subject in data.herd:
+                        data.queued.append("say 1 %s" % (speaker))
+                    elif subject in data.unlikely:
+                        data.queued.append("say 0 %s" % (speaker))
+                    if data.cop:
+                        data.requests.add(subject)
+                data.askers[speaker] = subject
+                question = True
+            elif target == MY_NAME and message == "Will you please use your power on this player tonight":
+                data.requests.add(subject)
+            message = input()
+    except EOFError:
+        pass
+    for datum in DATABASES:
+        if datum in ALLOW_SELF: continue
+        getattr(data, datum).discard(MY_NAME)
+    chance = random.random()
+    if data.queued:
+        print(data.queued.pop())
+    elif chance < .1:
+        target = chooseSet(data.targets or data.players)
+        if target != MY_NAME:
+            print("say 10 %s" % target)
+            data.askers[MY_NAME] = target
+    elif chance < .3 and data.targets:
+        print("say 6 %s" % chooseSet(data.guilty or data.targets))
+    elif chance < .5 and data.unlikely:
+        print("say 5 %s" % chooseSet(data.innocent or data.unlikely))
+    elif chance < .6 and not data.voted:
+        target = chooseSet(data.guilty or data.targets or data.herd or data.players)
+        if target not in data.mafiosos and target != MY_NAME:
+            print("vote %s" % target)
+        data.voted = True
+    elif chance < .8:
+        #do nothing
+        pass
+    elif chance < .9:
+        #Confuse everybody
+        print("say 1")
+        data.queued.append("say 0")
+######################
+#4: End of day
+elif "has killed" in opener:
+    victim = re.match("The town has killed (.*)!", opener)
+    if not victim:
+        exit()
+    victim = victim.group(1)
+    #remove dead people from lists
+    for datum in DATABASES:
+        getattr(data, datum).discard(victim)
+    role = input()
+    role = re.match("They were (?:a|the) (.*)", role).group(1)
+    if role == "cop" or role == "doctor":
+        data.used_roles.add(role)
+    #Misc: purge people from lists if too large
+    for list in data.unlikely, data.targets, data.herd:
+        while len(list) > len(data.players)/3:
+            list.pop()
+    for player in data.innocent:
+        data.unlikely.add(player)
+elif opener == "The town opted to lynch no one today.":
+    #Do nothing
+    pass
+#5: Night
+elif "night" in opener:
+    if not data.mafiosos and data.requests and random.random() > .5:
+        print(chooseSet(data.requests))
+    if data.doctor:
+        print(chooseSet(data.unlikely or data.players))
+    else:
+        while True:
+            try:
+              target = (data.targets or data.herd).pop()
+            except KeyError:
+              target = chooseSet(data.players)
+            if target in data.mafiosos or target == MY_NAME:
+                continue
+            print(target)
+            break
+else:
+    raise ValueError("Unknown message")
+saveData(data)
